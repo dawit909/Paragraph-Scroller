@@ -1,0 +1,35 @@
+{
+    "manifest_version": 3,
+    "name": "Paragraph Scroller",
+    "version": "1.0.0",
+    "description": "Keyboard-driven paragraph-by-paragraph scrolling with visual threshold tuning and element exclusion.",
+    "permissions": [
+        "storage",
+        "activeTab"
+    ],
+    "content_scripts": [
+        {
+            "matches": [
+                "<all_urls>"
+            ],
+            "js": [
+                "content.js"
+            ],
+            "run_at": "document_idle"
+        }
+    ],
+    "action": {
+        "default_popup": "popup/popup.html",
+        "default_title": "Paragraph Scroller Settings"
+    },
+    "browser_specific_settings": {
+        "gecko": {
+            "id": "paragraph-scroller@local",
+            "data_collection_permissions": {
+                "required": [
+                    "none"
+                ]
+            }
+        }
+    }
+}

@@ -225,8 +225,11 @@
         }
     }
 
+
     // --- Keyboard Shortcuts (Capture Phase) ---
     document.addEventListener('keydown', (e) => {
+        if (e.repeat) return;
+
         if (isBlacklisted || isPickerActive) return;
         const active = document.activeElement;
         const isTyping = active && (
@@ -235,10 +238,12 @@
         );
         if (isTyping) return;
 
-        if (e.key === 'j' || e.key === 'J') {
+        // deal with the case where the page is so short that no scrolling happens
+
+        if (e.code === 'KeyJ') {
             e.preventDefault();
             scrollToParagraph(1);
-        } else if (e.key === 'k' || e.key === 'K') {
+        } else if (e.code === 'KeyK') {
             e.preventDefault();
             scrollToParagraph(-1);
         }

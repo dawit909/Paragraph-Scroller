@@ -58,13 +58,9 @@
             return false;
         }
 
-        if (el.closest('nav, header, footer, aside, [class*="nav" i], [class*="menu" i]')) {
+        if (el.closest('nav, header, footer, aside')) {
             return false;
         }
-
-        // for (const excluded of excludedNodes) {
-        //     if (excluded === el || excluded.contains(el)) return false;
-        // }
 
         return true;
     }
@@ -72,15 +68,6 @@
     // --- Target Element Collector ---
     function getCandidateElements() {
         const readerRoot = document.getElementById('reader-root');
-
-        // const excludedNodes = [];
-        // for (const sel of siteConfig.exclusions) {
-        //     try {
-        //         document.querySelectorAll(sel).forEach(node => excludedNodes.push(node));
-        //     } catch (err) {
-        //         console.warn('[Paragraph Scroller] Invalid exclusion selector:', sel);
-        //     }
-        // }
 
         // Reader View Active: Scope to title and article elements
         if (readerRoot) {
@@ -101,39 +88,12 @@
         }
 
         // Standard Webpage Mode
-        const contentEl = document.querySelector('article, #content, [id*="content" i]')
-        const textElements = Array.from(contentEl.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6, blockquote, details'))
-            .filter(genericFilter)
-            .filter(el => el.innerText.trim().length !== 0)
 
-        const mediaElements = Array.from(contentEl.querySelectorAll('div, svg, img'))
-            .filter(genericFilter)
-            .filter(el => {
-                let textContained = false
-                textElements.some(txtEl => {
-                    if (el.contains(txtEl)) {
-                        textContained = true
-                        return true
-                    }
-                    return false
-                })
-                return !textContained
-            })
-
-        const len = mediaElements.length
-        let filteredMediaEls = mediaElements.filter(el1 => {
-            const descenCnt = mediaElements.reduce((descenCnt, el2) => {
-                if (el1 === el2) return descenCnt
-                if (el1.contains(el2)) return descenCnt + 1
-                return descenCnt
-            }, 0)
-            console.log(descenCnt, el1)
-            if (descenCnt > 19 || descenCnt / len > 0.5) return false
-            return true
-        })
-        filteredMediaEls = filteredMediaEls.filter(el1 => {
+        let rootElements = Array.from(document.querySelectorAll('article, #content, [id*="content" i]'))
+        console.log(rootElements, "before")
+        rootElements = rootElements.filter(el1 => {
             let isDescendent = false
-            filteredMediaEls.some(el2 => {
+            rootElements.some(el2 => {
                 if (el1 === el2) return false
                 if (el2.contains(el1)) {
                     isDescendent = true
@@ -143,7 +103,57 @@
             })
             return !isDescendent
         })
-        return textElements.concat(filteredMediaEls)
+        console.log(rootElements, "after")
+
+        let rstElements = null
+        for (let i = 0; i < rootElements.length; i++) {
+            const contentEl = rootElements[i]
+            const textElements = Array.from(contentEl.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6, blockquote, details'))
+                .filter(genericFilter)
+                .filter(el => el.innerText.trim().length !== 0)
+
+            const mediaElements = Array.from(contentEl.querySelectorAll('div, svg, img'))
+                .filter(genericFilter)
+                .filter(el => {
+                    let textContained = false
+                    textElements.some(txtEl => {
+                        if (el.contains(txtEl)) {
+                            textContained = true
+                            return true
+                        }
+                        return false
+                    })
+                    return !textContained
+                })
+
+            const len = mediaElements.length
+            let filteredMediaEls = mediaElements.filter(el1 => {
+                const descenCnt = mediaElements.reduce((descenCnt, el2) => {
+                    if (el1 === el2) return descenCnt
+                    if (el1.contains(el2)) return descenCnt + 1
+                    return descenCnt
+                }, 0)
+                if (descenCnt > 19 || descenCnt / len > 0.5) return false
+                return true
+            })
+            filteredMediaEls = filteredMediaEls.filter(el1 => {
+                let isDescendent = false
+                filteredMediaEls.some(el2 => {
+                    if (el1 === el2) return false
+                    if (el2.contains(el1)) {
+                        isDescendent = true
+                        return true
+                    }
+                    return false
+                })
+                return !isDescendent
+            })
+            const scrollableElements = textElements.concat(filteredMediaEls)
+            if (rstElements === null || rstElements.length < scrollableElements.length) {
+                rstElements = scrollableElements
+            }
+        }
+        return rstElements
     }
 
 
@@ -184,11 +194,11 @@
         let targetElement = elements[targetIdx]
         let delta = targetElement.getBoundingClientRect().top - minTop
 
-        if (Math.abs(delta) <= 10) {
+        if (Math.abs(delta) <= 30) {
             if (direction === 1) {
-                targetIdx = getCurrentIndex(elements, minTop + 10, direction);
+                targetIdx = getCurrentIndex(elements, minTop + 30, direction);
             } else {
-                targetIdx = getCurrentIndex(elements, minTop - 10, direction);
+                targetIdx = getCurrentIndex(elements, minTop - 30, direction);
             }
             if (targetIdx === -1) return
             targetElement = elements[targetIdx]

@@ -1,7 +1,7 @@
 {
     "manifest_version": 3,
     "name": "Paragraph Scroller",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "description": "Keyboard-driven paragraph-by-paragraph scrolling with visual threshold tuning and element exclusion.",
     "permissions": [
         "storage",

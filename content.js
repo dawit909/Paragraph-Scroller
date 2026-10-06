@@ -52,18 +52,35 @@
         if (area === 'local') loadConfig();
     });
 
+    function genericFilter(el) {
+        const rect = el.getBoundingClientRect();
+        if (rect.height === 0 || rect.width === 0) {
+            return false;
+        }
+
+        if (el.closest('nav, header, footer, aside, [class*="nav" i], [class*="menu" i]')) {
+            return false;
+        }
+
+        // for (const excluded of excludedNodes) {
+        //     if (excluded === el || excluded.contains(el)) return false;
+        // }
+
+        return true;
+    }
+
     // --- Target Element Collector ---
     function getCandidateElements() {
         const readerRoot = document.getElementById('reader-root');
 
-        const excludedNodes = [];
-        for (const sel of siteConfig.exclusions) {
-            try {
-                document.querySelectorAll(sel).forEach(node => excludedNodes.push(node));
-            } catch (err) {
-                console.warn('[Paragraph Scroller] Invalid exclusion selector:', sel);
-            }
-        }
+        // const excludedNodes = [];
+        // for (const sel of siteConfig.exclusions) {
+        //     try {
+        //         document.querySelectorAll(sel).forEach(node => excludedNodes.push(node));
+        //     } catch (err) {
+        //         console.warn('[Paragraph Scroller] Invalid exclusion selector:', sel);
+        //     }
+        // }
 
         // Reader View Active: Scope to title and article elements
         if (readerRoot) {
@@ -84,69 +101,74 @@
         }
 
         // Standard Webpage Mode
-        const rawElements = Array.from(document.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6, blockquote'));
+        const contentEl = document.querySelector('article, #content, [id*="content" i]')
+        const textElements = Array.from(contentEl.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6, blockquote, details'))
+            .filter(genericFilter)
+            .filter(el => el.innerText.trim().length !== 0)
 
-        return rawElements.filter(el => {
-            const rect = el.getBoundingClientRect();
-            if (rect.height === 0 || rect.width === 0) return false;
-            if (el.innerText.trim().length === 0) return false;
+        const mediaElements = Array.from(contentEl.querySelectorAll('div, svg, img'))
+            .filter(genericFilter)
+            .filter(el => {
+                let textContained = false
+                textElements.some(txtEl => {
+                    if (el.contains(txtEl)) {
+                        textContained = true
+                        return true
+                    }
+                    return false
+                })
+                return !textContained
+            })
 
-            if (el.closest('nav, header, footer, aside, [class*="nav" i], [class*="menu" i]')) {
-                return false;
-            }
-
-            for (const excluded of excludedNodes) {
-                if (excluded === el || excluded.contains(el)) return false;
-            }
-
-            return true;
-        });
+        const len = mediaElements.length
+        let filteredMediaEls = mediaElements.filter(el1 => {
+            const descenCnt = mediaElements.reduce((descenCnt, el2) => {
+                if (el1 === el2) return descenCnt
+                if (el1.contains(el2)) return descenCnt + 1
+                return descenCnt
+            }, 0)
+            console.log(descenCnt, el1)
+            if (descenCnt > 19 || descenCnt / len > 0.5) return false
+            return true
+        })
+        filteredMediaEls = filteredMediaEls.filter(el1 => {
+            let isDescendent = false
+            filteredMediaEls.some(el2 => {
+                if (el1 === el2) return false
+                if (el2.contains(el1)) {
+                    isDescendent = true
+                    return true
+                }
+                return false
+            })
+            return !isDescendent
+        })
+        return textElements.concat(filteredMediaEls)
     }
 
+
     // --- Active Element Resolver ---
-    function getCurrentIndex(elements, minTop, maxTop) {
+    function getCurrentIndex(elements, minTop, direction) {
+        const sign = direction === 1 ? 1 : -1
         // 1. Element aligned right at minTop (within subpixel tolerance)
         let bestIdx = -1;
         let bestDist = Infinity;
         for (let i = 0; i < elements.length; i++) {
             const top = elements[i].getBoundingClientRect().top;
-            const dist = Math.abs(top - minTop);
-            if (dist <= TOLERANCE && dist < bestDist) {
-                bestDist = dist;
+            const dist = top - minTop
+
+            if (dist * sign < 0) continue
+            const Absdist = Math.abs(dist)
+            if (Absdist < bestDist) {
+                bestDist = Absdist;
                 bestIdx = i;
             }
         }
-        if (bestIdx !== -1) return bestIdx;
-
-        // 2. Element spanning across minTop (tall paragraph currently being read)
-        for (let i = 0; i < elements.length; i++) {
-            const rect = elements[i].getBoundingClientRect();
-            if (rect.top < minTop && rect.bottom > minTop) {
-                return i;
-            }
-        }
-
-        // 3. First element sitting inside the visual reading window [minTop, maxTop]
-        for (let i = 0; i < elements.length; i++) {
-            const top = elements[i].getBoundingClientRect().top;
-            if (top >= minTop && top <= maxTop) {
-                return i;
-            }
-        }
-
-        // 4. Last element that has scrolled past minTop
-        for (let i = elements.length - 1; i >= 0; i--) {
-            if (elements[i].getBoundingClientRect().top < minTop) {
-                return i;
-            }
-        }
-
-        return 0;
+        return bestIdx;
     }
 
     // --- Scrolling Engine ---
     function scrollToParagraph(direction) {
-        if (isBlacklisted) return;
         const elements = getCandidateElements();
         if (elements.length === 0) return;
 
@@ -156,72 +178,28 @@
             ? (window.scrollY || document.documentElement.scrollTop || 0)
             : scrollContainer.scrollTop;
 
-        const currentIdx = getCurrentIndex(elements, minTop, maxTop);
-        let targetElement = null;
+        // const currentIdx = getCurrentIndex(elements, minTop, maxTop);
+        let targetIdx = getCurrentIndex(elements, minTop, direction);
+        if (targetIdx === -1) return
+        let targetElement = elements[targetIdx]
+        let delta = targetElement.getBoundingClientRect().top - minTop
 
-        if (direction === 1) { // Down
-            if (currentIdx + 1 < elements.length) {
-                targetElement = elements[currentIdx + 1];
+        if (Math.abs(delta) <= 10) {
+            if (direction === 1) {
+                targetIdx = getCurrentIndex(elements, minTop + 10, direction);
             } else {
-                targetElement = elements.find(el => el.getBoundingClientRect().top > maxTop);
+                targetIdx = getCurrentIndex(elements, minTop - 10, direction);
             }
-
-            // Downward Safeguard: Skip micro-deltas (less than 5px)
-            if (targetElement) {
-                const delta = targetElement.getBoundingClientRect().top - minTop;
-                if (delta <= 5) {
-                    const idx = elements.indexOf(targetElement);
-                    if (idx !== -1 && idx + 1 < elements.length) {
-                        targetElement = elements[idx + 1];
-                    }
-                }
-            }
-        } else { // Up
-            if (currentIdx > 0) {
-                targetElement = elements[currentIdx - 1];
-            } else {
-                // If at or before element 0, scroll cleanly to the top of the container
-                if (currentScroll > 0) {
-                    if (scrollContainer === window) {
-                        window.scrollTo({ top: 0, behavior: 'smooth' });
-                    } else {
-                        scrollContainer.scrollTo({ top: 0, behavior: 'smooth' });
-                    }
-                }
-                return;
-            }
-
-            // Upward Safeguard: Target must move viewport up by at least 5px
-            if (targetElement) {
-                const delta = targetElement.getBoundingClientRect().top - minTop;
-                if (delta >= -5) {
-                    const idx = elements.indexOf(targetElement);
-                    if (idx > 0) {
-                        targetElement = elements[idx - 1];
-                    } else {
-                        targetElement = null;
-                        if (currentScroll > 0) {
-                            if (scrollContainer === window) {
-                                window.scrollTo({ top: 0, behavior: 'smooth' });
-                            } else {
-                                scrollContainer.scrollTo({ top: 0, behavior: 'smooth' });
-                            }
-                            return;
-                        }
-                    }
-                }
-            }
+            if (targetIdx === -1) return
+            targetElement = elements[targetIdx]
+            delta = targetElement.getBoundingClientRect().top - minTop
         }
+        // console.log(targetElement)
 
-        if (targetElement) {
-            const targetTop = targetElement.getBoundingClientRect().top;
-            const delta = targetTop - minTop;
-
-            if (scrollContainer === window) {
-                window.scrollBy({ top: delta, behavior: 'smooth' });
-            } else {
-                scrollContainer.scrollBy({ top: delta, behavior: 'smooth' });
-            }
+        if (scrollContainer === window) {
+            window.scrollBy({ top: delta, behavior: 'smooth' });
+        } else {
+            scrollContainer.scrollBy({ top: delta, behavior: 'smooth' });
         }
     }
 

@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" fill="none">
+  <!-- Top Boundary Bar -->
+  <rect x="24" y="20" width="80" height="16" rx="8" fill="#2563eb" opacity="0.4" />
+
+  <!-- The Downward Leap (Heavy Chevron) -->
+  <path d="M 36 50 L 64 78 L 92 50" 
+        stroke="#2563eb" stroke-width="18" 
+        stroke-linecap="round" stroke-linejoin="round" />
+
+  <!-- Target Boundary Bar (Active Focus) -->
+  <rect x="24" y="92" width="80" height="16" rx="8" fill="#2563eb" />
+</svg>

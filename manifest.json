@@ -1,12 +1,19 @@
 {
     "manifest_version": 3,
     "name": "Paragraph Scroller",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "description": "Keyboard-driven paragraph-by-paragraph scrolling with visual threshold tuning and element exclusion.",
     "permissions": [
         "storage",
         "activeTab"
     ],
+    "icons": {
+        "16": "icons/icon.svg",
+        "32": "icons/icon.svg",
+        "48": "icons/icon.svg",
+        "96": "icons/icon.svg",
+        "128": "icons/icon.svg"
+    },
     "content_scripts": [
         {
             "matches": [
@@ -19,6 +26,7 @@
         }
     ],
     "action": {
+        "default_icon": "icons/icon.svg",
         "default_popup": "popup/popup.html",
         "default_title": "Paragraph Scroller Settings"
     },

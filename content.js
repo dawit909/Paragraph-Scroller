@@ -5,6 +5,10 @@
     let isBlacklisted = false;
     let isPickerActive = false;
     let shadowHost = null;
+    let scrollableElements = null
+    const isTest = true
+    let isDirty = true
+    let articleContainerEl = null
 
     // --- Dynamic Scroll Container Resolver ---
     function getScrollContainer() {
@@ -47,6 +51,56 @@
     }
 
     loadConfig();
+    updateScrollableElements()
+
+    function updateScrollableElements() {
+        isDirty = false
+        const readerRoot = document.getElementById('reader-root');
+
+        // Reader View Active: Scope to title and article elements
+        if (readerRoot) {
+            const rawElements = Array.from(readerRoot.querySelectorAll(
+                '#reader-title, #reader-content p, #reader-content h1, #reader-content h2, #reader-content h3, #reader-content h4, #reader-content h5, #reader-content h6, #reader-content blockquote, #reader-content li'
+            ));
+
+            return rawElements.filter(el => {
+                const rect = el.getBoundingClientRect();
+                if (rect.height === 0 || rect.width === 0) return false;
+                if (el.innerText.trim().length === 0) return false;
+
+                for (const excluded of excludedNodes) {
+                    if (excluded === el || excluded.contains(el)) return false;
+                }
+                return true;
+            });
+        }
+
+        if (articleContainerEl) {
+            scrollableElements = getScrollableEls(articleContainerEl)
+        } else {
+            let longestArr = null
+            let longestArrIdx = -1
+            // Standard Webpage Mode
+            const containerCandidateEls = getArticleContainerCandidates()
+            for (let i = 0; i < containerCandidateEls.length;i++){
+                const scrollableEls = getScrollableEls(containerCandidateEls[i])        
+                if (longestArr === null || longestArr.length < scrollableEls.length) {
+                    longestArr = scrollableEls
+                    longestArrIdx = i
+                }
+            }
+            scrollableElements = longestArr 
+            articleContainerEl = containerCandidateEls[longestArrIdx]
+        }
+
+        if (isTest && scrollableElements) {
+            for (let i = 0 ; i < scrollableElements.length; i++) {
+                scrollableElements[i].style.borderStyle = "solid"
+                scrollableElements[i].style.borderColor = "red"
+                scrollableElements[i].style.borderWidth = "medium"
+            }
+        }
+    }
 
     browser.storage.onChanged.addListener((changes, area) => {
         if (area === 'local') loadConfig();
@@ -63,6 +117,70 @@
         }
 
         return true;
+    }
+
+    function getArticleContainerCandidates() {
+        let rootElements = Array.from(document.querySelectorAll('article, #content, [id*="content" i]'))
+        // Remove descendents of another root element from rootElements
+        return rootElements.filter(el1 => {
+            let isDescendent = false
+            rootElements.some(el2 => {
+                if (el1 === el2) return false
+                if (el2.contains(el1)) {
+                    isDescendent = true
+                    return true
+                }
+                return false
+            })
+            return !isDescendent
+        })
+    }
+
+function getScrollableEls(containerEl) {
+    let rstElements = null
+    const textSelector = 'p, li, h1, h2, h3, h4, h5, h6, block, quote, details'
+    const mediaSelector = 'div, svg, img'
+    const textElements = Array.from(containerEl.querySelectorAll(textSelector))
+        .filter(el => el.innerText.trim().length !== 0)
+        .filter(genericFilter)
+
+    const mediaElements = Array.from(containerEl.querySelectorAll(mediaSelector))
+        .filter(genericFilter)
+        .filter(el => {
+            let textContained = false
+            textElements.some(txtEl => {
+                if (el.contains(txtEl)) {
+                    textContained = true
+                    return true
+                }
+                return false
+            })
+            return !textContained
+        })
+
+    const len = mediaElements.length
+    let filteredMediaEls = mediaElements.filter(el1 => {
+        const descenCnt = mediaElements.reduce((descenCnt, el2) => {
+            if (el1 === el2) return descenCnt
+            if (el1.contains(el2)) return descenCnt + 1
+            return descenCnt
+        }, 0)
+        if (descenCnt > 19 || descenCnt / len > 0.5) return false
+        return true
+    })
+    filteredMediaEls = filteredMediaEls.filter(el1 => {
+        let isDescendent = false
+        filteredMediaEls.some(el2 => {
+            if (el1 === el2) return false
+            if (el2.contains(el1)) {
+                isDescendent = true
+                return true
+            }
+            return false
+        })
+        return !isDescendent
+    })
+    return textElements.concat(filteredMediaEls)
     }
 
     // --- Target Element Collector ---
@@ -87,70 +205,13 @@
             });
         }
 
-        // Standard Webpage Mode
-
-        let rootElements = Array.from(document.querySelectorAll('article, #content, [id*="content" i]'))
-        console.log(rootElements, "before")
-        rootElements = rootElements.filter(el1 => {
-            let isDescendent = false
-            rootElements.some(el2 => {
-                if (el1 === el2) return false
-                if (el2.contains(el1)) {
-                    isDescendent = true
-                    return true
-                }
-                return false
-            })
-            return !isDescendent
-        })
-        console.log(rootElements, "after")
-
         let rstElements = null
-        for (let i = 0; i < rootElements.length; i++) {
-            const contentEl = rootElements[i]
-            const textElements = Array.from(contentEl.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6, blockquote, details'))
-                .filter(genericFilter)
-                .filter(el => el.innerText.trim().length !== 0)
-
-            const mediaElements = Array.from(contentEl.querySelectorAll('div, svg, img'))
-                .filter(genericFilter)
-                .filter(el => {
-                    let textContained = false
-                    textElements.some(txtEl => {
-                        if (el.contains(txtEl)) {
-                            textContained = true
-                            return true
-                        }
-                        return false
-                    })
-                    return !textContained
-                })
-
-            const len = mediaElements.length
-            let filteredMediaEls = mediaElements.filter(el1 => {
-                const descenCnt = mediaElements.reduce((descenCnt, el2) => {
-                    if (el1 === el2) return descenCnt
-                    if (el1.contains(el2)) return descenCnt + 1
-                    return descenCnt
-                }, 0)
-                if (descenCnt > 19 || descenCnt / len > 0.5) return false
-                return true
-            })
-            filteredMediaEls = filteredMediaEls.filter(el1 => {
-                let isDescendent = false
-                filteredMediaEls.some(el2 => {
-                    if (el1 === el2) return false
-                    if (el2.contains(el1)) {
-                        isDescendent = true
-                        return true
-                    }
-                    return false
-                })
-                return !isDescendent
-            })
-            const scrollableElements = textElements.concat(filteredMediaEls)
-            if (rstElements === null || rstElements.length < scrollableElements.length) {
-                rstElements = scrollableElements
+        // Standard Webpage Mode
+        const containerCandidateEls = getArticleContainerCandidates()
+        for (let i = 0; i < containerCandidateEls.length;i++){
+            const scrollableEls = getScrollableEls(containerCandidateEls[i])        
+            if (rstElements === null || rstElements.length < scrollableEls.length) {
+                rstElements = scrollableEls
             }
         }
         return rstElements
@@ -177,11 +238,17 @@
         return bestIdx;
     }
 
+    (new MutationObserver(mutations => {
+        isDirty = true
+    })).observe(document.body, {childList: true, subtree: true});
+
     // --- Scrolling Engine ---
     function scrollToParagraph(direction) {
-        const elements = getCandidateElements();
-        if (elements.length === 0) return;
+        console.log("scrollToParagraph")
+        if (isDirty) updateScrollableElements()
+        if (!scrollableElements || scrollableElements.length === 0) return;
 
+        // scrollableElements = getCandidateElements()
         const { minTop, maxTop } = siteConfig;
         const scrollContainer = getScrollContainer();
         const currentScroll = (scrollContainer === window)
@@ -189,19 +256,19 @@
             : scrollContainer.scrollTop;
 
         // const currentIdx = getCurrentIndex(elements, minTop, maxTop);
-        let targetIdx = getCurrentIndex(elements, minTop, direction);
+        let targetIdx = getCurrentIndex(scrollableElements, minTop, direction);
         if (targetIdx === -1) return
-        let targetElement = elements[targetIdx]
+        let targetElement = scrollableElements[targetIdx]
         let delta = targetElement.getBoundingClientRect().top - minTop
 
         if (Math.abs(delta) <= 30) {
             if (direction === 1) {
-                targetIdx = getCurrentIndex(elements, minTop + 30, direction);
+                targetIdx = getCurrentIndex(scrollableElements, minTop + 30, direction);
             } else {
-                targetIdx = getCurrentIndex(elements, minTop - 30, direction);
+                targetIdx = getCurrentIndex(scrollableElements, minTop - 30, direction);
             }
             if (targetIdx === -1) return
-            targetElement = elements[targetIdx]
+            targetElement = scrollableElements[targetIdx]
             delta = targetElement.getBoundingClientRect().top - minTop
         }
         // console.log(targetElement)
@@ -227,7 +294,6 @@
         if (isTyping) return;
 
         // deal with the case where the page is so short that no scrolling happens
-
         if (e.code === 'KeyJ') {
             e.preventDefault();
             scrollToParagraph(1);

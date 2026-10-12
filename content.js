@@ -1,64 +1,105 @@
 (() => {
-  // --- Constants & Configuration ---
-  const DEFAULT_CONFIG = { minTop: 60, maxTop: 220 };
+  // ==========================================================================
+  // 1. Constants & Configuration
+  // ==========================================================================
+  const CONFIG = {
+    minTop: 100,
+    subpixelThreshold: 1,
+    nearOffsetThreshold: 30,
+    programmaticScrollCooldown: 500
+  };
+
   const TEXT_SELECTOR = 'h1, h2, h3, h4, h5, h6, p, li, blockquote, details';
   const MEDIA_SELECTOR = 'div, svg, img';
+
   const BLOCK_TAGS = new Set([
     'p', 'div', 'article', 'section', 'li', 'blockquote', 'main', 'aside', 'header', 'footer'
   ]);
+
   const NOISE_SELECTOR = [
     'nav', 'footer', 'aside',
     '[role="navigation"]', '[role="complementary"]', '[role="toolbar"]',
     'form', '[class*="breadcrumb" i]', '[id*="breadcrumb" i]'
   ].join(', ');
 
+  const STRICT_SIDEBAR_SELECTOR = [
+    'aside', '[role="complementary"]',
+    '#sub', '#Sub', '[id="sub" i]', '#subinner', '#SubInner',
+    '#secondary', '[id="secondary" i]',
+    '[class*="layout--rail" i]', '[class*="duet--layout--rail" i]',
+    '[class*="grid-layout__aside" i]', '[class*="aside-container" i]',
+    '[id*="sidebar" i]', '.sidebar', '[class*="_sidebar" i]'
+  ].join(', ');
+
   const HIGHLIGHT_CLASS = 'para-scroller-active-focus';
 
-  // --- Runtime State ---
-  let siteConfig = { ...DEFAULT_CONFIG, exclusions: [] };
-  let isBlacklisted = false;
-  let isPickerActive = false;
-  let shadowHost = null;
+  // ==========================================================================
+  // 2. Runtime State
+  // ==========================================================================
   let scrollableElements = null;
   let articleContainerEl = null;
   let activeFocusedElement = null;
   let isDirty = true;
-  const isTest = false;
 
-  // Closed-loop anchor tracking (prevents subpixel drift)
+  // Closed-loop anchoring state
   let fixedAnchorTop = null;
   let manualScrollOccurred = false;
   let lastProgrammaticScrollTime = 0;
 
-  // --- Stylesheet Injection (Accent Background Tint Only) ---
+  // ==========================================================================
+  // 3. Focus Indicator & Highlighting
+  // ==========================================================================
   function injectHighlightStyles() {
     if (document.getElementById('para-scroller-focus-style')) return;
     const style = document.createElement('style');
     style.id = 'para-scroller-focus-style';
     style.textContent = `
-      .${HIGHLIGHT_CLASS} {
-        background-color: rgba(59, 130, 246, 0.12) !important;
-        border-radius: 10px !important;
-        transition: background-color 0.15s ease-out !important;
-      }
-    `;
+    .${HIGHLIGHT_CLASS} {
+      border-radius: 10px !important;
+      transition: background-color 0.15s ease-out !important;
+    }
+    .${HIGHLIGHT_CLASS}.para-theme-light {
+      background-color: rgba(59, 130, 246, 0.12) !important;
+    }
+    .${HIGHLIGHT_CLASS}.para-theme-dark {
+      background-color: rgba(245, 158, 11, 0.16) !important;
+    }
+  `;
     (document.head || document.documentElement).appendChild(style);
   }
 
-  injectHighlightStyles();
+  function isDarkTheme(el) {
+    let curr = el;
+    while (curr && curr !== document.documentElement) {
+      const bg = window.getComputedStyle(curr).backgroundColor;
+      const match = bg.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+      if (match) {
+        const r = parseInt(match[1], 10);
+        const g = parseInt(match[2], 10);
+        const b = parseInt(match[3], 10);
+        // Relative luminance formula (ITU-R BT.709)
+        const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        return luminance < 128;
+      }
+      curr = curr.parentElement;
+    }
+    return false;
+  }
 
-  // --- Non-Destructive Focus Marking ---
   function setFocusedElement(el) {
     if (activeFocusedElement && activeFocusedElement !== el) {
-      activeFocusedElement.classList.remove(HIGHLIGHT_CLASS);
+      activeFocusedElement.classList.remove(HIGHLIGHT_CLASS, 'para-theme-light', 'para-theme-dark');
     }
     activeFocusedElement = el;
     if (activeFocusedElement) {
-      activeFocusedElement.classList.add(HIGHLIGHT_CLASS);
+      const themeClass = isDarkTheme(activeFocusedElement) ? 'para-theme-dark' : 'para-theme-light';
+      activeFocusedElement.classList.add(HIGHLIGHT_CLASS, themeClass);
     }
   }
 
-  // --- Viewport State & Geometry Helpers ---
+  // ==========================================================================
+  // 4. Viewport & Geometry Utilities
+  // ==========================================================================
   function getScrollContainer() {
     const readerRoot = document.getElementById('reader-root');
     return readerRoot && readerRoot.scrollHeight > readerRoot.clientHeight ? readerRoot : window;
@@ -70,18 +111,10 @@
     return rect.height > 0 && rect.bottom > 0 && rect.top < window.innerHeight;
   }
 
-  function isUrlMatched(url, pattern) {
-    const regexStr = '^' + pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*') + '$';
-    try {
-      return new RegExp(regexStr).test(url);
-    } catch {
-      return false;
-    }
-  }
-
   function calcLinkDensity(el) {
     const total = el.textContent.trim().length;
     if (total === 0) return 0;
+
     let linkChars = 0;
     const links = el.getElementsByTagName('a');
     for (let i = 0; i < links.length; i++) {
@@ -90,63 +123,35 @@
     return linkChars / total;
   }
 
-  function isExcludedByUser(el) {
-    if (!siteConfig.exclusions || siteConfig.exclusions.length === 0) return false;
-    return siteConfig.exclusions.some((selector) => {
-      try {
-        return el.matches(selector) || el.closest(selector);
-      } catch {
-        return false;
-      }
+  function sortByVerticalPosition(elements) {
+    return elements.sort((a, b) => {
+      const rectA = a.getBoundingClientRect();
+      const rectB = b.getBoundingClientRect();
+      return rectA.top !== rectB.top ? rectA.top - rectB.top : rectA.left - rectB.left;
     });
   }
 
-  // --- Config Loader ---
-  async function loadConfig() {
-    const hostname = window.location.hostname;
-    const currentUrl = window.location.href;
-    const data = await browser.storage.local.get(['blacklist', 'defaults', 'sites']);
-
-    const blacklist = data.blacklist || [];
-    isBlacklisted = blacklist.some((pattern) => isUrlMatched(currentUrl, pattern));
-    if (isBlacklisted) return;
-
-    const defaults = data.defaults || DEFAULT_CONFIG;
-    const siteSettings = (data.sites && data.sites[hostname]) || {};
-
-    siteConfig = {
-      minTop: siteSettings.minTop ?? defaults.minTop,
-      maxTop: siteSettings.maxTop ?? defaults.maxTop,
-      exclusions: siteSettings.exclusions || []
-    };
-  }
-
-  loadConfig();
-  browser.storage.onChanged.addListener((changes, area) => {
-    if (area === 'local') loadConfig();
-  });
-
-  // --- Noise & Sidebar Identification ---
+  // ==========================================================================
+  // 5. Heuristic Noise & Structure Scanners
+  // ==========================================================================
   function isNoiseElement(el) {
     if (!el || el === document.body || el === document.documentElement) return false;
 
-    // 1. Semantic landmarks & navigation chrome
-    const landmarkNoise = el.closest(
-      'nav, footer, aside, [role="navigation"], [role="complementary"], [role="toolbar"], form, [class*="breadcrumb" i], [id*="breadcrumb" i]'
-    );
+    // Structural landmarks and navigation chrome
+    const landmarkNoise = el.closest(NOISE_SELECTOR);
     if (landmarkNoise && landmarkNoise !== document.body && landmarkNoise !== document.documentElement) {
       return true;
     }
 
-    // 2. Explicit sidebars, secondary columns, and rails
+    // Portal sidebars, recommendation blocks, and social rails
     const sideOrFeed = el.closest(
       '#sub, #Sub, [id="sub" i], #subinner, #SubInner, [id="subinner" i], #secondary, [id="secondary" i], ' +
-      '[class*="layout--rail" i], [class*="duet--layout--rail" i], [class*="grid-layout__aside" i], ' +
+      '[class*="layout--rail" i]', '[class*="duet--layout--rail" i]', '[class*="grid-layout__aside" i], ' +
       '[class*="aside-container" i], [class*="sidebar" i], [id*="sidebar" i], ' +
       '[class*="popular" i], [id*="popular" i], [class*="recirc" i], [id*="recirc" i], ' +
       '[class*="trending" i], [id*="trending" i], [class*="ranking" i], [id*="ranking" i], ' +
       '[class*="recommend" i], [id*="recommend" i], [aria-label*="popular" i], [aria-label*="recommend" i], ' +
-      '[aria-label*="further reading" i], [aria-label*="related" i], [data-testid*="author" i]'
+    '[aria-label*="further reading" i], [aria-label*="related" i], [data-testid*="author" i]'
     );
 
     if (sideOrFeed && sideOrFeed !== document.body && sideOrFeed !== document.documentElement) {
@@ -160,7 +165,6 @@
     return false;
   }
 
-  // --- Candidate Leaf Evaluation (Main Container Detection) ---
   function isQualifiedTextLeaf(el) {
     if (!el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) return false;
     if (isNoiseElement(el)) return false;
@@ -184,7 +188,9 @@
     return !hasBlockChild || directTextLength > 30;
   }
 
-  // --- Main Content Container Resolver ---
+  // ==========================================================================
+  // 6. Content Container Detection (LCA + Subsumption)
+  // ==========================================================================
   function findMainContentContainer() {
     const containerScores = new Map();
     const candidates = Array.from(
@@ -247,15 +253,7 @@
     evaluated.sort((a, b) => b.score - a.score);
     let best = evaluated[0];
 
-    const STRICT_SIDEBAR_SELECTOR = [
-      'aside', '[role="complementary"]',
-      '#sub', '#Sub', '[id="sub" i]', '#subinner', '#SubInner',
-      '#secondary', '[id="secondary" i]',
-      '[class*="layout--rail" i]', '[class*="duet--layout--rail" i]',
-      '[class*="grid-layout__aside" i]', '[class*="aside-container" i]',
-      '[id*="sidebar" i]', '.sidebar', '[class*="_sidebar" i]'
-    ].join(', ');
-
+    // Ancestor subsumption: Promote containers that hold more prose blocks without sidebars
     for (const candidate of evaluated) {
       if (candidate.container.contains(best.container) && candidate.container !== best.container) {
         if (candidate.container.querySelector(STRICT_SIDEBAR_SELECTOR)) {
@@ -270,11 +268,12 @@
     return best.container;
   }
 
-  // --- Scroll Target Filtering ---
+  // ==========================================================================
+  // 7. Scroll Target Extraction & Normalization
+  // ==========================================================================
   function genericFilter(el) {
     const rect = el.getBoundingClientRect();
     if (rect.height === 0 || rect.width === 0) return false;
-    if (isExcludedByUser(el)) return false;
     if (isNoiseElement(el)) return false;
 
     const tag = el.tagName.toLowerCase();
@@ -283,18 +282,17 @@
     const text = el.textContent.trim();
     if (text.length === 0) return false;
 
-    // Headings are always preserved regardless of character length
+    // Headings are never dropped by prose length constraints
     if (/^h[1-6]$/.test(tag)) return true;
-
     if (calcLinkDensity(el) > 0.85) return false;
 
     return true;
   }
 
   function extractScrollTargets(containerEl) {
-    const textElements = Array.from(containerEl.querySelectorAll(TEXT_SELECTOR))
-      .filter(genericFilter);
+    const textElements = Array.from(containerEl.querySelectorAll(TEXT_SELECTOR)).filter(genericFilter);
 
+    // Capture standalone h1 elements sitting above the container in article headers
     if (!textElements.some((el) => el.tagName === 'H1')) {
       const pageH1 = document.querySelector('h1');
       if (pageH1 && genericFilter(pageH1)) {
@@ -305,11 +303,12 @@
       }
     }
 
-    // Filter out parent text nodes containing other matched text nodes (e.g. blockquote > p)
-    const cleanTextElements = textElements.filter((el1) => {
-      return !textElements.some((el2) => el1 !== el2 && el1.contains(el2));
-    });
+    // Retain only innermost text blocks (e.g., discard parent blockquote if its p is captured)
+    const cleanTextElements = textElements.filter(
+      (el1) => !textElements.some((el2) => el1 !== el2 && el1.contains(el2))
+    );
 
+    // Extract non-text media containers that don't already wrap matched text
     const mediaElements = Array.from(containerEl.querySelectorAll(MEDIA_SELECTOR))
       .filter(genericFilter)
       .filter((el) => !cleanTextElements.some((txtEl) => el.contains(txtEl)));
@@ -322,23 +321,12 @@
       return !(descenCnt > 19 || descenCnt / len > 0.5);
     });
 
-    filteredMediaEls = filteredMediaEls.filter((el1) => {
-      return !filteredMediaEls.some((el2) => el1 !== el2 && el2.contains(el1));
-    });
+    // Retain top-most media containers
+    filteredMediaEls = filteredMediaEls.filter(
+      (el1) => !filteredMediaEls.some((el2) => el1 !== el2 && el2.contains(el1))
+    );
 
-    const allTargets = cleanTextElements.concat(filteredMediaEls);
-
-    // Sort strictly by vertical top position in document space
-    allTargets.sort((a, b) => {
-      const rectA = a.getBoundingClientRect();
-      const rectB = b.getBoundingClientRect();
-      if (rectA.top !== rectB.top) {
-        return rectA.top - rectB.top;
-      }
-      return rectA.left - rectB.left;
-    });
-
-    return allTargets;
+    return sortByVerticalPosition(cleanTextElements.concat(filteredMediaEls));
   }
 
   function updateScrollableElements() {
@@ -353,60 +341,21 @@
 
       const filtered = rawElements.filter((el) => {
         const rect = el.getBoundingClientRect();
-        return (
-          rect.height > 0 &&
-          rect.width > 0 &&
-          el.textContent.trim().length > 0 &&
-          !isExcludedByUser(el)
-        );
+        return rect.height > 0 && rect.width > 0 && el.textContent.trim().length > 0;
       });
 
-      const clean = filtered.filter((el1) => {
-        return !filtered.some((el2) => el1 !== el2 && el1.contains(el2));
-      });
-
-      clean.sort((a, b) => {
-        const rectA = a.getBoundingClientRect();
-        const rectB = b.getBoundingClientRect();
-        if (rectA.top !== rectB.top) {
-          return rectA.top - rectB.top;
-        }
-        return rectA.left - rectB.left;
-      });
-
-      scrollableElements = clean;
+      const clean = filtered.filter((el1) => !filtered.some((el2) => el1 !== el2 && el1.contains(el2)));
+      scrollableElements = sortByVerticalPosition(clean);
       return;
     }
 
     articleContainerEl = findMainContentContainer();
     scrollableElements = extractScrollTargets(articleContainerEl);
-
-    if (isTest && scrollableElements) {
-      for (let i = 0; i < scrollableElements.length; i++) {
-        scrollableElements[i].style.borderStyle = 'solid';
-        scrollableElements[i].style.borderColor = 'red';
-        scrollableElements[i].style.borderWidth = 'medium';
-      }
-    }
   }
 
-  new MutationObserver(() => {
-    isDirty = true;
-  }).observe(document.documentElement, { childList: true, subtree: true });
-
-  // --- Manual Scroll Detection ---
-  function markManualScroll() {
-    if (Date.now() - lastProgrammaticScrollTime > 500) {
-      manualScrollOccurred = true;
-    }
-  }
-
-  window.addEventListener('scroll', markManualScroll, { passive: true });
-  ['wheel', 'touchmove'].forEach((evt) => {
-    window.addEventListener(evt, () => { manualScrollOccurred = true; }, { passive: true });
-  });
-
-  // --- Active Element Resolvers ---
+  // ==========================================================================
+  // 8. Navigation & Closed-Loop Scrolling Engine
+  // ==========================================================================
   function getCurrentIndex(elements, minTop, direction) {
     const sign = direction === 1 ? 1 : -1;
     let bestIdx = -1;
@@ -426,7 +375,6 @@
     return bestIdx;
   }
 
-  // --- Scrolling Engine ---
   function scrollToParagraph(direction) {
     if (isDirty || !scrollableElements || scrollableElements.length === 0) {
       isDirty = false;
@@ -434,7 +382,7 @@
     }
     if (!scrollableElements || scrollableElements.length === 0) return;
 
-    const { minTop } = siteConfig;
+    const minTop = CONFIG.minTop;
     const scrollContainer = getScrollContainer();
     const isMarkOnScreen = isElementVisibleInViewport(activeFocusedElement);
 
@@ -442,7 +390,7 @@
     let targetTop = minTop;
 
     if (activeFocusedElement && isMarkOnScreen) {
-      // 1. Mark is on screen: move simply to the next element in sorted order
+      // On-screen navigation: Anchor to existing screen position without subpixel drift
       if (manualScrollOccurred || fixedAnchorTop === null) {
         fixedAnchorTop = Math.round(activeFocusedElement.getBoundingClientRect().top);
         manualScrollOccurred = false;
@@ -461,21 +409,22 @@
     }
 
     if (!targetElement) {
-      // 2. Mark is off screen: recover based on minTop and direction
+      // Off-screen recovery: Re-anchor closest element to minTop line
       let targetIdx = getCurrentIndex(scrollableElements, minTop, direction);
       if (targetIdx === -1) return;
 
       targetElement = scrollableElements[targetIdx];
       let delta = targetElement.getBoundingClientRect().top - minTop;
 
-      if (Math.abs(delta) <= 30) {
-        const offsetMinTop = direction === 1 ? minTop + 30 : minTop - 30;
+      if (Math.abs(delta) <= CONFIG.nearOffsetThreshold) {
+        const offsetMinTop = direction === 1 ? minTop + CONFIG.nearOffsetThreshold : minTop - CONFIG.nearOffsetThreshold;
         const nextIdx = getCurrentIndex(scrollableElements, offsetMinTop, direction);
         if (nextIdx !== -1) {
           targetIdx = nextIdx;
           targetElement = scrollableElements[targetIdx];
         }
       }
+
       targetTop = minTop;
       fixedAnchorTop = minTop;
       manualScrollOccurred = false;
@@ -485,9 +434,8 @@
 
     setFocusedElement(targetElement);
 
-    // Closed-loop scroll delta calculation against fixed targetTop
     const finalDelta = targetElement.getBoundingClientRect().top - targetTop;
-    if (Math.abs(finalDelta) > 1) {
+    if (Math.abs(finalDelta) > CONFIG.subpixelThreshold) {
       lastProgrammaticScrollTime = Date.now();
       if (scrollContainer === window) {
         window.scrollBy({ top: finalDelta, behavior: 'smooth' });
@@ -497,12 +445,60 @@
     }
   }
 
-  // --- Keyboard Shortcuts ---
+  // ==========================================================================
+  // 9. Event Observers & Initialization
+  // ==========================================================================
+  function markManualScroll() {
+    if (Date.now() - lastProgrammaticScrollTime > CONFIG.programmaticScrollCooldown) {
+      manualScrollOccurred = true;
+    }
+  }
+
+  window.addEventListener('scroll', markManualScroll, { passive: true });
+  ['wheel', 'touchmove'].forEach((evt) => {
+    window.addEventListener(evt, () => { manualScrollOccurred = true; }, { passive: true });
+  });
+
+  new MutationObserver(() => {
+    isDirty = true;
+  }).observe(document.documentElement, { childList: true, subtree: true });
+
+
+  // --- Blacklist Enforcement ---
+  let isBlacklisted = false;
+  function isUrlMatched(url, pattern) {
+    if (!url || !pattern) return false;
+    const regexStr = '^' + pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*') + '$';
+    try {
+      return new RegExp(regexStr).test(url);
+    } catch {
+      return false;
+    }
+  }
+
+  async function checkBlacklist() {
+    const data = await browser.storage.local.get(['blacklist']);
+    const blacklist = Array.isArray(data.blacklist) ? data.blacklist : [];
+    isBlacklisted = blacklist.some((pattern) => isUrlMatched(window.location.href, pattern));
+
+    if (isBlacklisted && activeFocusedElement) {
+      activeFocusedElement.classList.remove(HIGHLIGHT_CLASS);
+      activeFocusedElement = null;
+    }
+  }
+
+  checkBlacklist();
+
+  browser.storage.onChanged.addListener((changes, area) => {
+    if (area === 'local' && changes.blacklist) {
+      checkBlacklist();
+    }
+  });
+
   document.addEventListener(
     'keydown',
     (e) => {
-      if (e.repeat || isBlacklisted || isPickerActive) return;
-
+      if (e.repeat || isBlacklisted) return;
       const active = document.activeElement;
       const isTyping =
         active &&
@@ -520,214 +516,5 @@
     true
   );
 
-  // --- Visual Threshold Bars (Isolated Shadow DOM) ---
-  function toggleThresholdUI() {
-    if (shadowHost) {
-      shadowHost.remove();
-      shadowHost = null;
-      return;
-    }
-
-    shadowHost = document.createElement('div');
-    shadowHost.id = 'para-scroller-ui-host';
-    shadowHost.style.position = 'relative';
-    shadowHost.style.zIndex = '2147483647';
-    document.documentElement.appendChild(shadowHost);
-
-    const shadow = shadowHost.attachShadow({ mode: 'closed' });
-    const container = document.createElement('div');
-
-    container.innerHTML = `
-      <style>
-        .guide-bar {
-          position: fixed;
-          left: 0;
-          right: 0;
-          height: 3px;
-          z-index: 2147483647;
-          user-select: none;
-          display: flex;
-          align-items: center;
-          justify-content: flex-end;
-          padding-right: 20px;
-        }
-        .bar-min { background-color: #2563eb; }
-        .bar-max { background-color: #dc2626; }
-        .handle {
-          padding: 3px 8px;
-          font-family: monospace;
-          font-size: 11px;
-          color: #fff;
-          border-radius: 4px;
-          cursor: ns-resize;
-          box-shadow: 0 2px 4px rgba(0,0,0,0.3);
-        }
-        .bar-min .handle { background-color: #2563eb; }
-        .bar-max .handle { background-color: #dc2626; }
-        .close-pill {
-          position: fixed;
-          bottom: 20px;
-          right: 20px;
-          background: #111827;
-          color: #fff;
-          font-family: sans-serif;
-          font-size: 12px;
-          padding: 8px 14px;
-          border-radius: 9999px;
-          cursor: pointer;
-          z-index: 2147483647;
-          box-shadow: 0 4px 6px rgba(0,0,0,0.3);
-        }
-      </style>
-      <div id="minBar" class="guide-bar bar-min" style="top: ${siteConfig.minTop}px;">
-        <span class="handle">Min: <span id="minVal">${siteConfig.minTop}</span>px (Drag)</span>
-      </div>
-      <div id="maxBar" class="guide-bar bar-max" style="top: ${siteConfig.maxTop}px;">
-        <span class="handle">Max: <span id="maxVal">${siteConfig.maxTop}</span>px (Drag)</span>
-      </div>
-      <div id="closeBtn" class="close-pill">Done Adjusting</div>
-    `;
-
-    shadow.appendChild(container);
-
-    const minBar = shadow.getElementById('minBar');
-    const maxBar = shadow.getElementById('maxBar');
-    const minVal = shadow.getElementById('minVal');
-    const maxVal = shadow.getElementById('maxVal');
-
-    function makeDraggable(bar, valEl, isMin) {
-      let isDragging = false;
-
-      bar.addEventListener('mousedown', (e) => {
-        isDragging = true;
-        e.preventDefault();
-      });
-
-      window.addEventListener('mousemove', (e) => {
-        if (!isDragging) return;
-        let y = Math.max(0, Math.min(window.innerHeight, e.clientY));
-
-        if (isMin) {
-          y = Math.min(y, siteConfig.maxTop - 10);
-          siteConfig.minTop = y;
-        } else {
-          y = Math.max(y, siteConfig.minTop + 10);
-          siteConfig.maxTop = y;
-        }
-
-        bar.style.top = `${y}px`;
-        valEl.textContent = y;
-      });
-
-      window.addEventListener('mouseup', async () => {
-        if (!isDragging) return;
-        isDragging = false;
-
-        const hostname = window.location.hostname;
-        const data = await browser.storage.local.get(['sites']);
-        const sites = data.sites || {};
-        sites[hostname] = {
-          ...sites[hostname],
-          minTop: siteConfig.minTop,
-          maxTop: siteConfig.maxTop
-        };
-        await browser.storage.local.set({ sites });
-      });
-    }
-
-    makeDraggable(minBar, minVal, true);
-    makeDraggable(maxBar, maxVal, false);
-
-    shadow.getElementById('closeBtn').addEventListener('click', () => {
-      toggleThresholdUI();
-    });
-  }
-
-  function getUniqueSelector(el) {
-    if (!el || el === document.body || el === document.documentElement) return null;
-    if (el.id) return `#${CSS.escape(el.id)}`;
-
-    const path = [];
-    let curr = el;
-    while (curr && curr.nodeType === Node.ELEMENT_NODE && curr !== document.body && curr !== document.documentElement) {
-      let tag = curr.tagName.toLowerCase();
-      if (curr.className && typeof curr.className === 'string') {
-        const firstClass = curr.className.trim().split(/\s+/)[0];
-        if (firstClass && !firstClass.includes(':')) {
-          tag += `.${CSS.escape(firstClass)}`;
-        }
-      }
-      let sibling = curr;
-      let nth = 1;
-      while ((sibling = sibling.previousElementSibling)) {
-        if (sibling.tagName === curr.tagName) nth++;
-      }
-      tag += `:nth-of-type(${nth})`;
-      path.unshift(tag);
-      if (path.length >= 3) break;
-      curr = curr.parentElement;
-    }
-    return path.join(' > ');
-  }
-
-  function activatePicker() {
-    isPickerActive = true;
-    const readerRoot = document.getElementById('reader-root');
-    const cursorTarget = readerRoot || document.body;
-    cursorTarget.style.cursor = 'crosshair';
-
-    const onHover = (e) => {
-      if (!isPickerActive) return;
-      e.target.style.outline = '2px dashed #e11d48';
-      e.target.style.outlineOffset = '-2px';
-    };
-
-    const onLeave = (e) => {
-      e.target.style.outline = '';
-    };
-
-    const onClick = async (e) => {
-      if (!isPickerActive) return;
-      e.preventDefault();
-      e.stopPropagation();
-
-      e.target.style.outline = '';
-      cursorTarget.style.cursor = 'default';
-      isPickerActive = false;
-
-      document.removeEventListener('mouseover', onHover, true);
-      document.removeEventListener('mouseout', onLeave, true);
-      document.removeEventListener('click', onClick, true);
-
-      const selector = getUniqueSelector(e.target);
-      if (!selector) return;
-
-      const hostname = window.location.hostname;
-      const data = await browser.storage.local.get(['sites']);
-      const sites = data.sites || {};
-      const currentExclusions = sites[hostname]?.exclusions || [];
-
-      if (!currentExclusions.includes(selector)) {
-        currentExclusions.push(selector);
-        sites[hostname] = {
-          ...sites[hostname],
-          exclusions: currentExclusions
-        };
-        await browser.storage.local.set({ sites });
-        siteConfig.exclusions = currentExclusions;
-      }
-    };
-
-    document.addEventListener('mouseover', onHover, true);
-    document.addEventListener('mouseout', onLeave, true);
-    document.addEventListener('click', onClick, true);
-  }
-
-  browser.runtime.onMessage.addListener((message) => {
-    if (message.command === 'TOGGLE_BARS') {
-      toggleThresholdUI();
-    } else if (message.command === 'START_PICKER') {
-      activatePicker();
-    }
-  });
+  injectHighlightStyles();
 })();

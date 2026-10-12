@@ -1,41 +1,234 @@
-< !DOCTYPE html >
-    <html>
-        <head>
-            <meta charset="utf-8">
-                <link rel="stylesheet" href="popup.css">
-                </head>
-                <body>
-                    <div class="header">
-                        <h3>Paragraph Scroller</h3>
-                        <span id="siteDomain" class="badge">Detecting...</span>
-                    </div>
+<!DOCTYPE html>
+<html>
 
-                    <div class="actions">
-                        <button id="toggleBarsBtn" class="primary-btn">Adjust Threshold Bars</button>
-                        <button id="startPickerBtn" class="secondary-btn">Exclude Element via Click</button>
-                    </div>
+<head>
+    <meta charset="utf-8">
+    <style>
+        :root {
+            color-scheme: light dark;
+            --bg: #ffffff;
+            --text: #1f2937;
+            --border: #e5e7eb;
+            --btn-primary: #2563eb;
+            --btn-primary-hover: #1d4ed8;
+            --item-bg: #f9fafb;
+            --danger: #ef4444;
+            --danger-hover: #dc2626;
+        }
 
-                    <div class="section">
-                        <h4>Active Site Exclusions</h4>
-                        <div id="exclusionList" class="exclusion-list">
-                            <span class="empty-state">No exclusions set for this site.</span>
-                        </div>
-                    </div>
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg: #111827;
+                --text: #f9fafb;
+                --border: #374151;
+                --btn-primary: #3b82f6;
+                --btn-primary-hover: #2563eb;
+                --item-bg: #1f2937;
+            }
+        }
 
-                    <div class="section">
-                        <h4>Blacklisted Patterns</h4>
-                        <p class="subtext">e.g., *://*.youtube.com/* or https://site.com/*</p>
-                        <div class="blacklist-input-group">
-                            <input type="text" id="blacklistInput" placeholder="*://example.com/*">
-                                <button id="addBlacklistBtn">Add</button>
-                        </div>
-                        <div id="blacklistView" class="blacklist-view"></div>
-                    </div>
+        body {
+            width: 290px;
+            margin: 0;
+            padding: 14px;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            box-sizing: border-box;
+        }
 
-                    <div class="footer">
-                        <button id="resetSiteBtn" class="reset-btn">Reset Site Settings</button>
-                    </div>
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
 
-                    <script src="popup.js"></script>
-                </body>
-            </html>
+        h2 {
+            margin: 0;
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        button {
+            cursor: pointer;
+            border: 1px solid var(--border);
+            background: var(--item-bg);
+            color: var(--text);
+            padding: 5px 10px;
+            font-size: 12px;
+            border-radius: 6px;
+            transition: background 0.15s, border-color 0.15s;
+        }
+
+        button:hover {
+            border-color: #9ca3af;
+        }
+
+        .btn-primary {
+            width: 100%;
+            background: var(--btn-primary);
+            color: #ffffff;
+            border: none;
+            padding: 8px;
+            font-weight: 500;
+            margin-bottom: 8px;
+        }
+
+        .btn-primary:hover {
+            background: var(--btn-primary-hover);
+        }
+
+        /* Custom pattern input row */
+        .custom-input-group {
+            display: flex;
+            gap: 6px;
+            margin-bottom: 12px;
+        }
+
+        .custom-input {
+            flex: 1;
+            padding: 6px 8px;
+            font-size: 12px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--item-bg);
+            color: var(--text);
+            outline: none;
+            box-sizing: border-box;
+        }
+
+        .custom-input:focus {
+            border-color: var(--btn-primary);
+        }
+
+        .btn-add {
+            background: var(--btn-primary);
+            color: #ffffff;
+            border: none;
+            font-weight: 500;
+        }
+
+        .btn-add:hover {
+            background: var(--btn-primary-hover);
+        }
+
+        .list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+
+        .list-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 6px 8px;
+            background: var(--item-bg);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            margin-bottom: 6px;
+            font-size: 12px;
+            gap: 6px;
+        }
+
+        .pattern-text {
+            flex: 1;
+            word-break: break-all;
+        }
+
+        .pattern-input {
+            flex: 1;
+            padding: 3px 6px;
+            font-size: 12px;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            background: var(--bg);
+            color: var(--text);
+            outline: none;
+            box-sizing: border-box;
+        }
+
+        .pattern-input:focus {
+            border-color: var(--btn-primary);
+        }
+
+        .delete-btn {
+            background: transparent;
+            border: none;
+            color: var(--danger);
+            font-size: 14px;
+            font-weight: bold;
+            padding: 2px 6px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        .delete-btn:hover {
+            background: rgba(239, 68, 68, 0.15);
+            color: var(--danger-hover);
+        }
+
+        .empty-msg {
+            font-size: 12px;
+            color: #9ca3af;
+            text-align: center;
+            padding: 10px 0;
+        }
+
+        .custom-input.is-invalid {
+            border-color: var(--danger) !important;
+        }
+
+        .custom-input.is-matching {
+            border-color: #10b981 !important;
+        }
+
+        .pattern-status {
+            font-size: 11px;
+            margin-top: -6px;
+            margin-bottom: 10px;
+            min-height: 14px;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .status-error {
+            color: var(--danger);
+        }
+
+        .status-match {
+            color: #10b981;
+        }
+
+        .status-info {
+            color: #6b7280;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="header">
+        <h2>Blacklist</h2>
+        <button id="editBtn">Edit</button>
+    </div>
+
+    <button id="addCurrentBtn" class="btn-primary">Add Current Site</button>
+
+    <div class="custom-input-group">
+        <input type="text" id="customPatternInput" class="custom-input" placeholder="*example.com/docs/*">
+        <button id="addCustomBtn" class="btn-add">Add</button>
+    </div>
+    <div id="patternStatus" class="pattern-status"></div>
+
+
+    <ul id="blacklistEl" class="list"></ul>
+    <div id="emptyMsg" class="empty-msg" style="display: none;">No sites blacklisted</div>
+
+    <script src="popup.js"></script>
+</body>
+
+</html>
